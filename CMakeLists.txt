@@ -1,39 +1,34 @@
-cmake_minimum_required(VERSION 2.8.3)
-project(resource_retriever)
+include(GNUInstallDirs)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+cmake_minimum_required(VERSION 2.6)
 
-find_package(catkin REQUIRED COMPONENTS rosconsole roslib)
+SET(CXX_DISABLE_WERROR TRUE)
+INCLUDE(cmake/base.cmake)
+INCLUDE(cmake/cpack.cmake)
+INCLUDE(cmake/boost.cmake)
+INCLUDE(cmake/ros.cmake)
 
-catkin_python_setup()
+SET(PROJECT_NAME resource_retriever)
+SET(PROJECT_DESCRIPTION "Version independent from ROS")
+SET(PROJECT_URL "")
 
-catkin_package(
-  LIBRARIES ${PROJECT_NAME}
-  INCLUDE_DIRS include)
+SETUP_PROJECT()
 
-include_directories(include)
+ADD_REQUIRED_DEPENDENCY ("libcurl")
+ADD_REQUIRED_DEPENDENCY ("urdfdom")
 
+ADD_LIBRARY(${PROJECT_NAME} SHARED src/retriever.cpp)
 
-include_directories(${catkin_INCLUDE_DIRS})
-link_directories(${catkin_LIBRARY_DIRS})
+PKG_CONFIG_USE_DEPENDENCY (${PROJECT_NAME} "libcurl")
+PKG_CONFIG_USE_DEPENDENCY (${PROJECT_NAME} "urdfdom")
 
-include(FindCURL)
-if(NOT CURL_FOUND)
-  message("CURL not found!  Aborting...")
-  fail()
-endif(NOT CURL_FOUND)
-include_directories(${CURL_INCLUDE_DIRS})
+PKG_CONFIG_APPEND_LIBS(${PROJECT_NAME})
 
+INSTALL (TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
-add_library(${PROJECT_NAME} src/retriever.cpp)
-target_link_libraries(${PROJECT_NAME} ${CURL_LIBRARIES} ${catkin_LIBRARIES})
+INSTALL (DIRECTORY include/${PROJECT_NAME}/
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME})
 
-if(CATKIN_ENABLE_TESTING)
-  add_subdirectory(test EXCLUDE_FROM_ALL)
-endif()
+INSTALL (FILES package.xml DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_NAME})
 
-install(TARGETS ${PROJECT_NAME}
-  DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
-
-install(DIRECTORY include/${PROJECT_NAME}/
-  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
+SETUP_PROJECT_FINALIZE()

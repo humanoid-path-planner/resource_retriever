@@ -25,12 +25,11 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <boost/filesystem.hpp>
 #include "resource_retriever/retriever.h"
 
 #include <string.h>
-
-#include <ros/package.h>
-#include <ros/console.h>
+#include <console_bridge/console.h>
 
 #include <curl/curl.h>
 
@@ -46,7 +45,7 @@ public:
     CURLcode ret = curl_global_init(CURL_GLOBAL_ALL);
     if (ret != 0)
     {
-      ROS_ERROR("Error initializing libcurl! retcode = %d", ret);
+      CONSOLE_BRIDGE_logError ("Error initializing libcurl! retcode = %d", ret);
     }
     else
     {
@@ -95,29 +94,128 @@ size_t curlWriteFunc(void* buffer, size_t size, size_t nmemb, void* userp)
   return size * nmemb;
 }
 
+/**
+ * @brief      Retrieve the path of the file whose path is given in an url-format.
+ *             Currently convert from the folliwing patterns : package:// or file://
+ *
+ * @param[in]  string          The path given in the url-format
+ * @param[in]  package_dirs    A list of packages directories where to search for files
+ *                             if its pattern starts with package://
+ *
+ * @return     The path to the file (can be a relative or absolute path)
+ */
+  inline std::string retrieveResourcePath(const std::string & string,
+					const std::vector<std::string> & package_dirs) throw (std::invalid_argument)
+{
+
+  namespace bf = boost::filesystem;
+  std::string result_path;
+
+  const std::string separator("://");
+  const std::size_t pos_separator = string.find(separator);
+
+  if (pos_separator != std::string::npos)
+    {
+      std::string scheme = string.substr(0, pos_separator);
+      std::string path = string.substr(pos_separator+3, std::string::npos);
+
+      if(scheme == "package")
+	{
+	  // if exists p1/string, path = p1/string,
+	  // else if exists p2/string, path = p2/string
+	  // else return an empty string that may provoke an error in loadPolyhedronFromResource()
+
+	  // concatenate package_path with filename
+	  std::ostringstream errorMsg;
+	  errorMsg << "None of the following files was found: ";
+	  for (std::size_t i = 0; i < package_dirs.size(); ++i)
+	    {
+	      std::string candidate (package_dirs[i] + "/" + path);
+	      if ( bf::exists( bf::path(candidate)))
+		{
+		  result_path = std::string ("file://") + candidate;
+		  return result_path;
+		}
+	      else {
+		errorMsg << candidate;
+		if (i+1 < package_dirs.size())
+		  errorMsg << ", ";
+		else
+		  errorMsg << ".";
+	      }
+	    }
+	  // If file not found, throw an error
+	  throw std::invalid_argument (errorMsg.str ().c_str ());
+	}
+      else if (scheme == "file")
+	{
+	  result_path = path;
+	}
+      else
+	{
+	  const std::string exception_message ("Schemes of form" + scheme + "are not handled");
+	  throw std::invalid_argument(exception_message);
+	}
+    }
+  else // return the entry string
+    {
+      result_path = string;
+      assert(false && "the path does not respect the pattern package:// or file://");
+    }
+
+  return result_path;
+}
+
+  /**
+   * @brief      Parse an environment variable if exists and extract paths according to the delimiter.
+   *
+   * @param[in]  env_var_name The name of the environment variable.
+   * @param[in]  delimiter The delimiter between two consecutive paths.
+   *
+   * @return The vector of paths extracted from the environment variable value.
+   */
+  inline std::vector<std::string> extractPathFromEnvVar(const std::string & env_var_name, const std::string & delimiter = ":")
+  {
+    const char * env_var_value = std::getenv(env_var_name.c_str());
+    std::vector<std::string> env_var_paths;
+
+    if (env_var_value != NULL)
+    {
+      std::string policyStr (env_var_value);
+      // Add a separator at the end so that last path is also retrieved
+      policyStr += std::string (":");
+      size_t lastOffset = 0;
+
+      while(true)
+      {
+        size_t offset = policyStr.find_first_of(delimiter, lastOffset);
+        if (offset < policyStr.size())
+          env_var_paths.push_back(policyStr.substr(lastOffset, offset - lastOffset));
+        if (offset == std::string::npos)
+          break;
+        else
+          lastOffset = offset + 1; // add one to skip the delimiter
+      }
+    }
+
+    return env_var_paths;
+  }
+
+/**
+ * @brief      Parse the environment variable ROS_PACKAGE_PATH and extract paths
+ *
+ * @return     The vector of paths extracted from the environment variable ROS_PACKAGE_PATH
+ */
+inline std::vector<std::string> rosPaths()
+{
+  return extractPathFromEnvVar("ROS_PACKAGE_PATH");
+}
+
+
 MemoryResource Retriever::get(const std::string& url)
 {
-  std::string mod_url = url;
-  if (url.find("package://") == 0)
-  {
-    mod_url.erase(0, strlen("package://"));
-    size_t pos = mod_url.find("/");
-    if (pos == std::string::npos)
-    {
-      throw Exception(url, "Could not parse package:// format into file:// format");
-    }
-
-    std::string package = mod_url.substr(0, pos);
-    mod_url.erase(0, pos);
-    std::string package_path = ros::package::getPath(package);
-
-    if (package_path.empty())
-    {
-      throw Exception(url, "Package [" + package + "] does not exist");
-    }
-
-    mod_url = "file://" + package_path + mod_url;
-  }
+  std::vector <std::string> paths (rosPaths ());
+  std::string mod_url = retrieveResourcePath (url, paths);
 
   curl_easy_setopt(curl_handle_, CURLOPT_URL, mod_url.c_str());
   curl_easy_setopt(curl_handle_, CURLOPT_WRITEFUNCTION, curlWriteFunc);
@@ -136,7 +234,7 @@ MemoryResource Retriever::get(const std::string& url)
   }
   else if (!buf.v.empty())
   {
-    res.size = buf.v.size();
+    res.size = (unsigned int) buf.v.size();
     res.data.reset(new uint8_t[res.size]);
     memcpy(res.data.get(), &buf.v[0], res.size);
   }
